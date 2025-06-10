@@ -89,8 +89,6 @@ struct TShape {
     template <typename, typename, bool>
     friend struct Layout;
 
-    // TODO: remove unnecessary ones
-
     static constexpr int _op_rows = OpRows;
     static constexpr int _op_cols = OpCols;
 };

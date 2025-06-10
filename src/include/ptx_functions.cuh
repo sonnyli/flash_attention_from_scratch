@@ -76,4 +76,141 @@ mma_m16n8k16_f32_accum(float &d1, float &d2, float &d3, float &d4,
     }
 }
 
+//
+// st functions
+//
+// Adapted from cccl:
+// https://github.com/NVIDIA/cccl/blob/29e6e2fc0a2fcaf3e8b2451fe89e3a40edf8c2b0/libcudacxx/include/cuda/__ptx/instructions/generated/st.h
+//
+
+template <typename _B128>
+FA_DEVICE void st_global(_B128 *__addr, _B128 __src) {
+    static_assert(sizeof(_B128) == 16, "");
+
+    asm volatile("{\n\t .reg .b128 B128_src; \n\t"
+                 "mov.b128 B128_src, {%1, %2}; \n"
+                 "st.global.b128 [%0], B128_src;\n\t"
+                 "}"
+                 :
+                 : "l"(__addr), "l"((*reinterpret_cast<longlong2 *>(&__src)).x),
+                   "l"((*reinterpret_cast<longlong2 *>(&__src)).y)
+                 : "memory");
+}
+
+template <typename _B128>
+FA_DEVICE void st_global_relaxed_gpu(_B128 *__addr, _B128 __src) {
+    static_assert(sizeof(_B128) == 16, "");
+
+    asm volatile("{\n\t .reg .b128 B128_src; \n\t"
+                 "mov.b128 B128_src, {%1, %2}; \n"
+                 "st.relaxed.gpu.global.b128 [%0], B128_src;\n\t"
+                 "}"
+                 :
+                 : "l"(__addr), "l"((*reinterpret_cast<longlong2 *>(&__src)).x),
+                   "l"((*reinterpret_cast<longlong2 *>(&__src)).y)
+                 : "memory");
+}
+
+template <typename _B128>
+FA_DEVICE void st_global_relaxed_sys(_B128 *__addr, _B128 __src) {
+    static_assert(sizeof(_B128) == 16, "");
+
+    asm volatile("{\n\t .reg .b128 B128_src; \n\t"
+                 "mov.b128 B128_src, {%1, %2}; \n"
+                 "st.relaxed.sys.global.b128 [%0], B128_src;\n\t"
+                 "}"
+                 :
+                 : "l"(__addr), "l"((*reinterpret_cast<longlong2 *>(&__src)).x),
+                   "l"((*reinterpret_cast<longlong2 *>(&__src)).y)
+                 : "memory");
+}
+
+template <typename _B128>
+FA_DEVICE void st_global_ef(_B128 *__addr, _B128 __src) {
+    static_assert(sizeof(_B128) == 16, "");
+
+    asm volatile("{\n\t .reg .b128 B128_src; \n\t"
+                 "mov.b128 B128_src, {%1, %2}; \n"
+                 "st.global.L1::evict_first.b128 [%0], B128_src;\n\t"
+                 "}"
+                 :
+                 : "l"(__addr), "l"((*reinterpret_cast<longlong2 *>(&__src)).x),
+                   "l"((*reinterpret_cast<longlong2 *>(&__src)).y)
+                 : "memory");
+}
+
+template <typename _B128>
+FA_DEVICE void st_global_ef_relaxed_gpu(_B128 *__addr, _B128 __src) {
+    static_assert(sizeof(_B128) == 16, "");
+
+    asm volatile("{\n\t .reg .b128 B128_src; \n\t"
+                 "mov.b128 B128_src, {%1, %2}; \n"
+                 "st.relaxed.gpu.global.L1::evict_first.b128 [%0], "
+                 "B128_src;\n\t"
+                 "}"
+                 :
+                 : "l"(__addr), "l"((*reinterpret_cast<longlong2 *>(&__src)).x),
+                   "l"((*reinterpret_cast<longlong2 *>(&__src)).y)
+                 : "memory");
+}
+
+template <typename _B128>
+FA_DEVICE void st_global_ef_relaxed_sys(_B128 *__addr, _B128 __src) {
+    static_assert(sizeof(_B128) == 16, "");
+
+    asm volatile("{\n\t .reg .b128 B128_src; \n\t"
+                 "mov.b128 B128_src, {%1, %2}; \n"
+                 "st.relaxed.sys.global.L1::evict_first.b128 [%0], "
+                 "B128_src;\n\t"
+                 "}"
+                 :
+                 : "l"(__addr), "l"((*reinterpret_cast<longlong2 *>(&__src)).x),
+                   "l"((*reinterpret_cast<longlong2 *>(&__src)).y)
+                 : "memory");
+}
+
+template <typename _B128>
+FA_DEVICE void st_global_na(_B128 *__addr, _B128 __src) {
+    static_assert(sizeof(_B128) == 16, "");
+
+    asm volatile("{\n\t .reg .b128 B128_src; \n\t"
+                 "mov.b128 B128_src, {%1, %2}; \n"
+                 "st.global.L1::no_allocate.b128 [%0], B128_src;\n\t"
+                 "}"
+                 :
+                 : "l"(__addr), "l"((*reinterpret_cast<longlong2 *>(&__src)).x),
+                   "l"((*reinterpret_cast<longlong2 *>(&__src)).y)
+                 : "memory");
+}
+
+template <typename _B128>
+FA_DEVICE void st_global_na_relaxed_gpu(_B128 *__addr, _B128 __src) {
+    static_assert(sizeof(_B128) == 16, "");
+
+    asm volatile("{\n\t .reg .b128 B128_src; \n\t"
+                 "mov.b128 B128_src, {%1, %2}; \n"
+                 "st.relaxed.gpu.global.L1::no_allocate.b128 [%0], "
+                 "B128_src;\n\t"
+                 "}"
+                 :
+                 : "l"(__addr), "l"((*reinterpret_cast<longlong2 *>(&__src)).x),
+                   "l"((*reinterpret_cast<longlong2 *>(&__src)).y)
+                 : "memory");
+}
+
+template <typename _B128>
+FA_DEVICE void st_global_na_relaxed_sys(_B128 *__addr, _B128 __src) {
+    static_assert(sizeof(_B128) == 16, "");
+
+    asm volatile("{\n\t .reg .b128 B128_src; \n\t"
+                 "mov.b128 B128_src, {%1, %2}; \n"
+                 "st.relaxed.sys.global.L1::no_allocate.b128 [%0], "
+                 "B128_src;\n\t"
+                 "}"
+                 :
+                 : "l"(__addr), "l"((*reinterpret_cast<longlong2 *>(&__src)).x),
+                   "l"((*reinterpret_cast<longlong2 *>(&__src)).y)
+                 : "memory");
+}
+
 } // namespace flash
