@@ -84,8 +84,9 @@ struct GSMemLdstConfig {
         return (tid % thrs_per_row) * COLS_PER_FRAGMENT;
     }
 
-    static constexpr index_t gmem_thr_offset(int tid, GMemStride stride) {
-        return stride.crd2idx(tid_to_thr_row(tid), tid_to_thr_col(tid), 0, 0);
+    static constexpr index_t gmem_thr_offset(int tid) {
+        return GMemStride::crd2idx(tid_to_thr_row(tid), tid_to_thr_col(tid), 0,
+                                   0);
     }
 
     static constexpr int smem_thr_offset(int tid) {
@@ -104,9 +105,8 @@ struct GSMemLdstConfig {
 // executes in a different "swizzle space", and our layout allows us to keep the
 // same offsets for a thread between iterations.
 template <typename op, /* either GM2SM_async or SM2GM */
-          typename Cfg, typename value_t = half, typename GMemStride>
-FA_DEVICE_CONSTEXPR void copy_block_GSM(value_t *gmem, value_t *smem,
-                                        const GMemStride &gmem_stride) {
+          typename Cfg, typename value_t = half>
+FA_DEVICE_CONSTEXPR void copy_block_GSM(value_t *gmem, value_t *smem) {
     FA_UNROLL
     for (int ss = 0; ss < Cfg::OpIters::swizzle_spaces(); ++ss) {
         FA_UNROLL
@@ -118,7 +118,7 @@ FA_DEVICE_CONSTEXPR void copy_block_GSM(value_t *gmem, value_t *smem,
                 int t = ss * Cfg::OpStride::swizzle_space();
 
                 auto smem_idx = Cfg::SmemStride::crd2idx(r, c, 0, t);
-                auto gmem_idx = gmem_stride.crd2idx(r, c, 0, t);
+                auto gmem_idx = Cfg::GMemStride::crd2idx(r, c, 0, t);
                 op()(&gmem[gmem_idx], &smem[smem_idx]);
             }
         }

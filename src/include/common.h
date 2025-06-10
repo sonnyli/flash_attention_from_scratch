@@ -14,6 +14,8 @@
 #define FA_DEVICE __forceinline__ __device__
 #define FA_DEVICE_CONSTEXPR __forceinline__ __device__ constexpr
 
+#define N_HEADS 16
+
 #define WARP_SIZE 32
 #define SHFL_ENTIRE_WARP_MASK 0xffffffff
 

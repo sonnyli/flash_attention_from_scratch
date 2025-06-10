@@ -143,7 +143,7 @@ struct StaticForwardKernelConfig {
     using GSMemShapeKV = GSMemShape<B_c, SwizzleTileSize, 1, DHeadSwizzleTiles>;
 
     // does not include row stride
-    using GMemStride = GMemStride<1, 0, SwizzleTileSize>;
+    using GMemStride = SMemStride<CFG.d_head * N_HEADS, 1, 0, SwizzleTileSize>;
 
     using GSSMemQOStride =
         SMemStride<SwizzleTileSize, 1, 0, B_r * SwizzleTileSize>;
