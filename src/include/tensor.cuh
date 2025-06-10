@@ -59,7 +59,7 @@ struct GSRBlockTensor
     // The location in memory that the warp reads from for Q, K, V from gmem to
     // smem and O for smem to gmem.
     value_t *gmem_ptr;
-    RuntimeStride gmem_stride;
+    RuntimeStride<index_t> gmem_stride;
 
     // The location in memory that the warp writes to for Q, K, V from gmem
     // to smem and O for smem to gmem. It is offset to the specific position
@@ -76,7 +76,7 @@ struct GSRBlockTensor
 
     FA_DEVICE GSRBlockTensor(value_t *gmem_block_ptr, index_t _gmem_seq_stride,
                              value_t *_smem_ptr)
-        : Base(), gmem_stride(RuntimeStride{int(_gmem_seq_stride), 1, 0}) {
+        : Base(), gmem_stride(RuntimeStride<index_t>{_gmem_seq_stride, 1, 0}) {
         const int tid = threadIdx.x;
 
         // We increment the pointers to the exact location for the thread.
@@ -93,8 +93,8 @@ struct GSRBlockTensor
         auto smem_srmem_ptr =
             _smem_ptr + (GSRConfig::compute_over_entire_block
                              ? 0
-                             : GSRConfig().warp_ldst_rows * warp_rank *
-                                   GSRConfig().smem_cols);
+                             : GSRConfig::warp_ldst_rows * warp_rank *
+                                   GSRConfig::smem_cols);
 
         smem_s2rmem_ptr =
             smem_srmem_ptr + srmem::lane_to_thr_offset_s2rmem(lane_id);
@@ -102,13 +102,11 @@ struct GSRBlockTensor
             smem_srmem_ptr + srmem::lane_to_thr_offset_r2smem(lane_id);
     }
 
-    FA_DEVICE_CONSTEXPR void advance_gmem_block() {
-        gmem_ptr += GSRConfig().block_size * gmem_stride.row;
-    }
-
-    FA_DEVICE_CONSTEXPR void copy_GM2SM() {
-        copy_block_GSM<GM2SM_op, gsmem>(gmem_ptr, smem_gsmem_ptr,
-                                        gmem_stride.row);
+    FA_DEVICE_CONSTEXPR void copy_GM2SM(const int &block) {
+        auto gmem_block_offset =
+            block * GSRConfig::block_size * gmem_stride.row;
+        copy_block_GSM<GM2SM_op, gsmem>(gmem_ptr + gmem_block_offset,
+                                        smem_gsmem_ptr, gmem_stride.row);
     }
 
     FA_DEVICE_CONSTEXPR void copy_SM2GM() {

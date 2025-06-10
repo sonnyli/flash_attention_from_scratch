@@ -115,13 +115,14 @@ FA_DEVICE_CONSTEXPR void final_softmax_normalization(O_accum_t &O_accum,
     for (int q = 0; q < O_accum_t::Shape::rows(); ++q) {
         l[q] += __shfl_xor_sync(SHFL_ENTIRE_WARP_MASK, l[q], 2);
         l[q] += __shfl_xor_sync(SHFL_ENTIRE_WARP_MASK, l[q], 1);
+        l[q] = 1.0f / l[q];
     }
 
     FA_UNROLL
     for (int q = 0; q < O_accum_t::Shape::rows(); ++q) {
         FA_UNROLL
         for (int d_head = 0; d_head < O_accum_t::Shape::cols(); ++d_head) {
-            O_accum(q, d_head) /= l[q];
+            O_accum(q, d_head) *= l[q];
         }
     }
 }

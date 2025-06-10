@@ -45,10 +45,11 @@ struct SwizzleStride {
 };
 
 // RuntimeStride for global memory
+template <typename index_t = int64_t>
 struct RuntimeStride {
-    int row;
-    int col;
-    int tile = 0;
+    index_t row;
+    index_t col;
+    index_t tile = 0;
 };
 
 template <int Rows, int Cols, int Tiles = 1, int OpRows = 1, int OpCols = 1,
