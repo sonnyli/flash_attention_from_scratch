@@ -37,24 +37,21 @@ FA_DEVICE void cp_async(T *smem_to, T *gmem_from) {
                  : "r"(smem_ptr), "l"(gmem_from), "n"(size));
 }
 
-template <typename T>
+template <bool transpose, typename T>
 FA_DEVICE void ldmatrix_x4(T *load_from, uint32_t &a1, uint32_t &a2,
                            uint32_t &a3, uint32_t &a4) {
     uint32_t smem_ptr = __cvta_generic_to_shared(load_from);
-    asm volatile("ldmatrix.sync.aligned.x4.m8n8.shared.b16"
-                 "{%0, %1, %2, %3}, [%4];"
-                 : "=r"(a1), "=r"(a2), "=r"(a3), "=r"(a4)
-                 : "r"(smem_ptr));
-}
-
-template <typename T>
-FA_DEVICE void ldmatrix_x4_transpose(T *load_from, uint32_t &a1, uint32_t &a2,
-                                     uint32_t &a3, uint32_t &a4) {
-    uint32_t smem_ptr = __cvta_generic_to_shared(load_from);
-    asm volatile("ldmatrix.sync.aligned.x4.trans.m8n8.shared.b16"
-                 "{%0, %1, %2, %3}, [%4];"
-                 : "=r"(a1), "=r"(a2), "=r"(a3), "=r"(a4)
-                 : "r"(smem_ptr));
+    if constexpr (transpose) {
+        asm volatile("ldmatrix.sync.aligned.x4.trans.m8n8.shared.b16"
+                     "{%0, %1, %2, %3}, [%4];"
+                     : "=r"(a1), "=r"(a2), "=r"(a3), "=r"(a4)
+                     : "r"(smem_ptr));
+    } else {
+        asm volatile("ldmatrix.sync.aligned.x4.m8n8.shared.b16"
+                     "{%0, %1, %2, %3}, [%4];"
+                     : "=r"(a1), "=r"(a2), "=r"(a3), "=r"(a4)
+                     : "r"(smem_ptr));
+    }
 }
 
 template <typename value_t>
