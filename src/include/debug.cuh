@@ -14,7 +14,7 @@
 
 namespace flash {
 
-constexpr int debug_warp_rank = 1;
+constexpr int debug_warp_rank = 2;
 constexpr int debug_block = 0;
 
 using print_cast = float;
@@ -49,32 +49,50 @@ FA_DEVICE bool is_warp_leader() {
     if (is_debug_warp())                                                       \
         printf(fmt, ##__VA_ARGS__);
 
-template <typename value_t, typename castTo = print_cast>
-FA_DEVICE void print_smem_matrix(value_t *t, int LD, int nrows = 32,
-                                 int ncols = 32, const char *name = nullptr,
+template <typename Tensor, typename castTo = print_cast>
+FA_DEVICE void print_smem_matrix(Tensor &t, const char *name = nullptr,
                                  const int iter = -1) {
     __syncthreads();
-    if (!is_warp_leader()) {
-        return;
-    }
-    if (name != nullptr && iter >= 0) {
-        printf("%s_%d SMEM:\n", name, iter);
-    }
-    for (int i1 = 0; i1 < nrows; i1++) {
-        for (int i2 = 0; i2 < ncols; i2++) {
-            if constexpr (std::is_same_v<castTo, int>) {
-                printf("%d ", static_cast<castTo>(t[i1 * LD + i2]));
-            } else {
-                printf("%5.2f ", static_cast<castTo>(t[i1 * LD + i2]));
+
+    using SmemStride = typename Tensor::SmemStride;
+    if (thread0()) {
+        if (name != nullptr && iter >= 0) {
+            printf("%s_%d SMEM:\n", name, iter);
+        }
+
+        auto smem_ptr = t.smem_gsmem_ptr;
+        for (int row = 0; row < Tensor::GSMemShape::rows(); row++) {
+            int cnt = 0;
+            for (int stile = 0; stile < Tensor::GSMemShape::swizzle_spaces();
+                 stile++) {
+                for (int tile = 0; tile < Tensor::GSMemShape::tiles(); tile++) {
+                    for (int col = 0; col < Tensor::GSMemShape::cols(); col++) {
+                        if constexpr (std::is_same_v<castTo, int>) {
+                            printf("%d ", static_cast<castTo>(
+                                              smem_ptr[SmemStride::crd2idx(
+                                                  row, col, tile, stile)]));
+                        } else {
+                            printf("%5.2f ", static_cast<castTo>(
+                                                 smem_ptr[SmemStride::crd2idx(
+                                                     row, col, tile, stile)]));
+                        }
+
+                        if (cnt % 8 == 7) {
+                            printf(" ");
+                        }
+                        ++cnt;
+                    }
+                }
+            }
+            printf("\n");
+
+            if (row % 8 == 7) {
+                printf("\n");
             }
         }
         printf("\n");
-
-        if (i1 % 8 == 7) {
-            printf("\n");
-        }
     }
-    printf("\n");
+    __syncthreads();
 }
 
 template <typename Tensor_t_, typename cast_to = print_cast>
@@ -94,23 +112,23 @@ FA_DEVICE void print_rmem_matrix(Tensor_t_ &t, const char *name = nullptr,
     }
 
     auto view = t.view_with_op_tiling_removed().as_type2();
-    using Tensor_t = decltype(view);
+    using Tensor = decltype(view);
 
-    for (int row_fragment = 0; row_fragment < Tensor_t::Shape::rows();
+    for (int row_fragment = 0; row_fragment < Tensor::Shape::rows();
          ++row_fragment) {
         if (is_warp_leader()) {
             printf("row: %d\n", row_fragment * 8);
         }
         for (int thr_row = 0; thr_row < 8; ++thr_row) {
 
-            for (int current_tile = 0; current_tile < Tensor_t::Shape::tiles();
+            for (int current_tile = 0; current_tile < Tensor::Shape::tiles();
                  ++current_tile) {
                 if (print_tile >= 0 && current_tile != print_tile) {
                     continue;
                 }
 
-                for (int col_fragment = 0;
-                     col_fragment < Tensor_t::Shape::cols(); ++col_fragment) {
+                for (int col_fragment = 0; col_fragment < Tensor::Shape::cols();
+                     ++col_fragment) {
                     __syncwarp();
 
                     for (int thr_col = 0; thr_col < 4; ++thr_col) {
@@ -163,22 +181,21 @@ FA_DEVICE void print_rmem_accum_matrix(Tensor_t_ &t, const char *name = nullptr,
     }
 
     auto view = t.view_with_op_tiling_removed();
-    using Tensor_t = decltype(view);
+    using Tensor = decltype(view);
 
-    for (int row_fragment = 0; row_fragment < Tensor_t::Shape::rows();
+    for (int row_fragment = 0; row_fragment < Tensor::Shape::rows();
          ++row_fragment) {
         if (is_warp_leader()) {
             printf("row: %d\n", row_fragment * 8);
         }
         for (int thr_row = 0; thr_row < 8; ++thr_row) {
-            for (int current_tile = 0; current_tile < Tensor_t::Shape::tiles();
+            for (int current_tile = 0; current_tile < Tensor::Shape::tiles();
                  ++current_tile) {
                 if (print_tile >= 0 && current_tile != print_tile) {
                     continue;
                 }
 
-                for (int col_fragment = 0;
-                     col_fragment < Tensor_t::Shape::cols();
+                for (int col_fragment = 0; col_fragment < Tensor::Shape::cols();
                      col_fragment += 2) {
                     __syncwarp();
 
@@ -216,9 +233,9 @@ FA_DEVICE void print_rmem_accum_matrix(Tensor_t_ &t, const char *name = nullptr,
 }
 
 template <typename Array_t, typename cast_to = print_cast>
-FA_DEVICE void print_rf_row(const Array_t &array, const char *name = nullptr,
-                            const int iter = -1,
-                            bool print_entire_warp = true) {
+FA_DEVICE void print_rmem_row(const Array_t &array, const char *name = nullptr,
+                              const int iter = -1,
+                              bool print_entire_warp = true) {
     const int lane_id = threadIdx.x % 32;
     if (!is_debug_warp()) {
         return;
@@ -241,6 +258,9 @@ FA_DEVICE void print_rf_row(const Array_t &array, const char *name = nullptr,
                 }
             }
         }
+        if (is_warp_leader()) {
+            printf("\n");
+        }
     }
     __syncwarp();
     if (is_warp_leader()) {
@@ -249,15 +269,54 @@ FA_DEVICE void print_rf_row(const Array_t &array, const char *name = nullptr,
     __syncwarp();
 }
 
+// Helper structure to check if a class has op_row and op_col methods
+template <typename T, typename = void>
+struct has_op_stride : std::false_type {};
+
+template <typename T>
+struct has_op_stride<T,
+                     std::void_t<decltype(T::op_row()), decltype(T::op_col())>>
+    : std::true_type {};
+
+// Helper structure to check if a class has swizzle_space method
+template <typename T, typename = void>
+struct has_swizzle_tile : std::false_type {};
+
+template <typename T>
+struct has_swizzle_tile<T, std::void_t<decltype(T::swizzle_space())>>
+    : std::true_type {};
+
+// Helper structure to check if a class has op_rows and op_cols methods
+template <typename T, typename = void>
+struct has_op_shape : std::false_type {};
+
+template <typename T>
+struct has_op_shape<T,
+                    std::void_t<decltype(T::op_rows()), decltype(T::op_cols())>>
+    : std::true_type {};
+
+// Helper structure to check if a class has swizzle_spaces method
+template <typename T, typename = void>
+struct has_swizzle_tiles : std::false_type {};
+
+template <typename T>
+struct has_swizzle_tiles<T, std::void_t<decltype(T::swizzle_spaces())>>
+    : std::true_type {};
+
 // Helper function to print stride information
 template <typename Stride>
 FA_DEVICE static void print_stride(const char *name) {
     printf("  %s: {row: %d, col: %d, tile: %d", name, Stride::row(),
            Stride::col(), Stride::tile());
 
-    // Only print op_row and op_col if they're non-zero
-    if (Stride::op_row() != 0 || Stride::op_col() != 0) {
+    // Print op_row and op_col if they exist
+    if constexpr (has_op_stride<Stride>::value) {
         printf(", op_row: %d, op_col: %d", Stride::op_row(), Stride::op_col());
+    }
+
+    // Print swizzle_space if it exists
+    if constexpr (has_swizzle_tile<Stride>::value) {
+        printf(", swizzle_space: %d", Stride::swizzle_space());
     }
 
     printf("}\n");
@@ -269,10 +328,15 @@ FA_DEVICE static void print_shape(const char *name) {
     printf("  %s: {rows: %d, cols: %d, tiles: %d", name, Shape::rows(),
            Shape::cols(), Shape::tiles());
 
-    // Only print op_rows and op_cols if they're not 1 (default)
-    if (Shape::op_rows() != 1 || Shape::op_cols() != 1) {
+    // Print op_rows and op_cols if they exist
+    if constexpr (has_op_shape<Shape>::value) {
         printf(", op_rows: %d, op_cols: %d", Shape::op_rows(),
                Shape::op_cols());
+    }
+
+    // Print swizzle_spaces if it exists
+    if constexpr (has_swizzle_tiles<Shape>::value) {
+        printf(", swizzle_spaces: %d", Shape::swizzle_spaces());
     }
 
     printf("}\n");
@@ -294,6 +358,25 @@ FA_DEVICE static void print_tensor_type(const char *name) {
     printf("\n  Layout Details for %s:\n", name);
     using Layout = typename Tensor::Layout;
     Layout::print();
+}
+
+// Helper function to print OpIters information for GSMemLdstConfig
+template <typename GSMemCfg>
+FA_DEVICE static void print_gsmem_opiters(const char *name) {
+    printf("\n  %s OpIters:\n", name);
+    printf("    rows: %d, cols: %d\n", GSMemCfg::OpIters::rows(),
+           GSMemCfg::OpIters::cols());
+    printf("    swizzle_spaces: %d\n", GSMemCfg::OpIters::swizzle_spaces());
+}
+
+// Helper function to print OpIters information for SRMemLdstConfig
+template <typename SRMemCfg>
+FA_DEVICE static void print_srmem_opiters(const char *name) {
+    printf("\n  %s OpIters:\n", name);
+    printf("    rows: %d, cols: %d\n", SRMemCfg::OpIters::rows(),
+           SRMemCfg::OpIters::cols());
+    printf("    tiles: %d, swizzle_spaces: %d\n", SRMemCfg::OpIters::tiles(),
+           SRMemCfg::OpIters::swizzle_spaces());
 }
 
 // Print configuration as a static member function of FlashKernelTypes
@@ -341,30 +424,57 @@ FA_DEVICE static void print_config() {
     printf("  K_rmem_tile_buffer_size: %d\n", N::K_rmem_tile_buffer_size);
     printf("  V_rmem_tile_buffer_size: %d\n", N::V_rmem_tile_buffer_size);
 
-    // Print Common config
-    printf("\nCommon Configuration:\n");
-    printf("  swizzled: %d\n", Kernel::common.swizzled);
-    printf("  async_copy: %d\n", Kernel::common.async_copy);
+    // Print dimensions & constants
+    printf("\nDimensions & Constants:\n");
+    printf("  SwizzleTileSize: %d\n", Kernel::SwizzleTileSize);
+    printf("  DHeadSwizzleTiles: %d\n", Kernel::DHeadSwizzleTiles);
+    printf("  B_c_SwizzleTiles: %d\n", Kernel::B_c_SwizzleTiles);
+    printf("  SRMemTileSize: %d\n", Kernel::SRMemTileSize);
+    printf("  SRMemTileFragments: %d\n", Kernel::SRMemTileFragments);
+    printf("  SRMemTilesDHead: %d\n", Kernel::SRMemTilesDHead);
+    printf("  RSMemTileSize: %d\n", Kernel::RSMemTileSize);
+    printf("  RSMemTilesDHead: %d\n", Kernel::RSMemTilesDHead);
 
     // Print Strides
-    printf("\nStrides:\n");
+    printf("\nBase Strides:\n");
     print_stride<typename Kernel::OpGSMemStride>("OpGSMemStride");
     print_stride<typename Kernel::OpS2RSmemStride>("OpS2RSmemStride");
     print_stride<typename Kernel::OpS2RRmemStride>("OpS2RRmemStride");
     print_stride<typename Kernel::OpR2SSMemStride>("OpR2SSMemStride");
     print_stride<typename Kernel::OpR2SRmemStride>("OpR2SRmemStride");
 
+    // Print GSSMemStrides
+    printf("\nGSSMem Strides:\n");
+    print_stride<typename Kernel::GSSMemQOStride>("GSSMemQOStride");
+    print_stride<typename Kernel::GSSMemKVStride>("GSSMemKVStride");
+
+    // Print OpIters for GSMemLdstConfig types
+    printf("\nGSMemLdstConfig OpIters:\n");
+    print_gsmem_opiters<typename Kernel::GSMemLdstConfigQO>(
+        "GSMemLdstConfigQO");
+    print_gsmem_opiters<typename Kernel::GSMemLdstConfigKV>(
+        "GSMemLdstConfigKV");
+
+    // Print OpIters for SRMemLdstConfig types
+    printf("\nSRMemLdstConfig OpIters:\n");
+    print_srmem_opiters<typename Kernel::S2RMemLdstConfigQ>(
+        "S2RMemLdstConfigQ");
+    print_srmem_opiters<typename Kernel::S2RMemLdstConfigK>(
+        "S2RMemLdstConfigK");
+    print_srmem_opiters<typename Kernel::S2RMemLdstConfigV>(
+        "S2RMemLdstConfigV");
+    print_srmem_opiters<typename Kernel::R2SMemLdstConfigO>(
+        "R2SMemLdstConfigO");
+
     // Print Shapes and Memory Configurations
     printf("\nShapes and Memory:\n");
     print_shape<typename Kernel::GSMemShapeQO>("GSMemShapeQO");
     print_shape<typename Kernel::GSMemShapeKV>("GSMemShapeKV");
-    print_stride<typename Kernel::GSMemQKVOStride>("GSMemQKVOStride");
 
     printf("\nS2R Memory Shapes:\n");
     print_shape<typename Kernel::S2RSmemShapeQ>("S2RSmemShapeQ");
-    print_shape<typename Kernel::S2RSmemShapeK>("S2RSmemShapeK");
-    print_shape<typename Kernel::S2RSmemShapeV>("S2RSmemShapeV");
-    print_shape<typename Kernel::R2SSmemShapeO>("R2SSmemShapeO");
+
+    // Note: Skip shapes that might not be defined in all configurations
 
     printf("\nRmem Shapes:\n");
     print_shape<typename Kernel::RmemShapeQ>("RmemShapeQ");
@@ -375,7 +485,7 @@ FA_DEVICE static void print_config() {
     print_shape<typename Kernel::RmemShapeSAccum>("RmemShapeSAccum");
     print_shape<typename Kernel::RmemShapeP>("RmemShapeP");
 
-    printf("\nStrides:\n");
+    printf("\nSpecific Strides:\n");
     print_stride<typename Kernel::S2RSmemStrideQ>("S2RSmemStrideQ");
     print_stride<typename Kernel::S2RSmemStrideK>("S2RSmemStrideK");
     print_stride<typename Kernel::S2RSmemStrideV>("S2RSmemStrideV");

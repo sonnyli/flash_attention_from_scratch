@@ -136,6 +136,8 @@ flash_forward_kernel(__grid_constant__ const ForwardKernelArgs args) {
     // The accumulator for O is only kept in registers. At the end of the
     // kernel, it is then converted into a 16-bit type and then copied into
     // gmem.
+    O_accum_t O_accum;
+    auto O_accum_no_op_tiling = O_accum.view_with_op_tiling_removed();
 
     int block = args.n_KV_blocks - 1;
     // Start the async copy of the Q and K tiles.
@@ -162,17 +164,13 @@ flash_forward_kernel(__grid_constant__ const ForwardKernelArgs args) {
         // We only wait for the Q block to finish loading.
         cp_async_wait<1>();
 
-        // We need the __syncwarp() in addition to the cp_async_wait()
+        // We need the __syncthreads() in addition to the cp_async_wait()
         // because cp_async_wait() only blocks until the current thread has
-        // finished loading. The entire warp will read this block from
-        // smem, so we need to wait on a warp-wide barrier.
-        // For K and V, we will need a __syncthreads() instead.
+        // finished loading. The entire CTA will read this block from
+        // smem, so we need to wait on a CTA-wide barrier.
         __syncthreads();
         Q.copy_SM2RF_all_tiles();
     }
-
-    O_accum_t O_accum;
-    auto O_accum_no_op_tiling = O_accum.view_with_op_tiling_removed();
 
     process_kv_block<true, Kernel::optimized_softmax, Q_t, K_t, V_t, S_accum_t,
                      P_t, O_accum_t, row_statistics_t, GEMM_QK, GEMM_PV>(
@@ -185,7 +183,6 @@ flash_forward_kernel(__grid_constant__ const ForwardKernelArgs args) {
                          GEMM_PV>(Q, K, V, O_accum, m, l, softmax_scale, block);
     }
 
-    // Finish summing row_sums across all threads in the same row.
     final_softmax_normalization(O_accum_no_op_tiling, l);
 
     O_t O_b16(gmem_O, gmem_seq_stride, smem_O);
@@ -200,12 +197,9 @@ flash_forward_kernel(__grid_constant__ const ForwardKernelArgs args) {
     //   of 8x16B uncoalesced rows (128B/warp)
     O_b16.copy_RF2SM();
 
-    // Wait until all threads in the same warp have written to smem.
-    // We do not need __syncthreads() here because the warps operate on
-    // independent chunks of O.
+    // Wait until all threads have written to smem.
     __syncthreads();
 
-    // Copy the final O tile from smem to gmem.
     O_b16.copy_SM2GM();
 }
 

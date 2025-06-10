@@ -8,8 +8,10 @@ namespace flash {
 
 // TensorView
 //
-// value_t contains the actual type
-// storage_t contains the storage type. for fp16 and bf16, this is uint32_t.
+// `value_t` contains the actual type
+// `storage_t` contains the storage type.
+// - for fp16 and bf16, this is `uint32_t`.
+// - for float, this is `float`.
 //
 // The indexing is given by the shape of the storage_t, so fp16 and bf16 and
 // compressed by 2. This could've been better designed to handle this.

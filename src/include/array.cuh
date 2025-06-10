@@ -2,8 +2,10 @@
 
 #include "common.h"
 
-template <int N, typename value_t>
+template <int N, typename value_t_>
 struct Array {
+    using value_t = value_t_;
+
     value_t _data[N];
 
     FA_DEVICE_CONSTEXPR value_t *data() { return _data; }
@@ -24,6 +26,18 @@ struct Array {
     }
 
     FA_DEVICE_CONSTEXPR static size_t size() { return N; }
+
+    template <typename Other>
+    FA_DEVICE_CONSTEXPR void copy(const Other &other) {
+        static_assert(std::is_same<value_t, typename Other::value_t>::value,
+                      "Arrays must have the same value type");
+        static_assert(N == Other::size(), "Arrays must have the same size");
+
+        FA_UNROLL
+        for (int i = 0; i < N; ++i) {
+            _data[i] = other[i];
+        }
+    }
 };
 
 template <int N, typename value_t, int Alignment = 16>

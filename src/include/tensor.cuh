@@ -15,7 +15,7 @@ struct RmemBlockTensor {
     using Shape = typename RmemConfig::rmem_shape;
     using Stride =
         decltype(stride_for_shape<Shape, RmemConfig::row_major_op_tile>());
-    using Layout = Layout<Stride, Shape>;
+    using Layout = RmemLayout<Stride, Shape>;
     using Layout2x2 = decltype(Layout::layout_as_2x2_op_tiled());
 
     using value_t = value_t_;
@@ -46,20 +46,25 @@ struct RmemBlockTensor {
     }
 };
 
-template <typename GSRConfig, typename value_t, typename gsmem, typename srmem,
+template <typename GSRConfig, typename value_t_, typename gsmem, typename srmem,
           typename index_t = int64_t>
 struct GSRBlockTensor
-    : public RmemBlockTensor<typename GSRConfig::rmem, value_t, index_t> {
+    : public RmemBlockTensor<typename GSRConfig::rmem, value_t_, index_t> {
+    using value_t = value_t_;
+    using GSMemShape = gsmem::TensorShape;
+    using SmemStride = gsmem::SmemStride;
+    using GMemStride = gsmem::GMemStride;
     using Base = RmemBlockTensor<typename GSRConfig::rmem, value_t, index_t>;
-    using GM2SM_op = std::conditional_t<GSRConfig::common.async_copy,
-                                        GM2SM_async<value_t>, GM2SM<value_t>>;
+    using GM2SM_op = GM2SM_async<value_t>;
 
     using SM2GM_op = SM2GM<value_t>;
 
     // The location in memory that the warp reads from for Q, K, V from gmem to
     // smem and O for smem to gmem.
+
+    // TODO: move these to tensorview
     value_t *gmem_ptr;
-    RuntimeStride<index_t> gmem_stride;
+    GMemStride gmem_stride;
 
     // The location in memory that the warp writes to for Q, K, V from gmem
     // to smem and O for smem to gmem. It is offset to the specific position
@@ -76,7 +81,7 @@ struct GSRBlockTensor
 
     FA_DEVICE GSRBlockTensor(value_t *gmem_block_ptr, index_t _gmem_seq_stride,
                              value_t *_smem_ptr)
-        : Base(), gmem_stride(RuntimeStride<index_t>{_gmem_seq_stride, 1, 0}) {
+        : Base(), gmem_stride(GMemStride{_gmem_seq_stride}) {
         const int tid = threadIdx.x;
 
         // We increment the pointers to the exact location for the thread.
@@ -90,11 +95,11 @@ struct GSRBlockTensor
         r2smem_swizzle_stride =
             srmem::lane_to_thr_swizzle_stride_r2smem(lane_id);
 
-        auto smem_srmem_ptr =
-            _smem_ptr + (GSRConfig::compute_over_entire_block
-                             ? 0
-                             : GSRConfig::warp_ldst_rows * warp_rank *
-                                   GSRConfig::smem_cols);
+        auto warp_offset =
+            GSRConfig::compute_over_entire_block
+                ? 0
+                : GSRConfig::warp_ldst_rows * warp_rank * SmemStride::row();
+        auto smem_srmem_ptr = _smem_ptr + warp_offset;
 
         smem_s2rmem_ptr =
             smem_srmem_ptr + srmem::lane_to_thr_offset_s2rmem(lane_id);
@@ -103,15 +108,13 @@ struct GSRBlockTensor
     }
 
     FA_DEVICE_CONSTEXPR void copy_GM2SM(const int &block) {
-        auto gmem_block_offset =
-            block * GSRConfig::block_size * gmem_stride.row;
+        auto gmem_block_offset = block * GSMemShape::rows() * gmem_stride.row;
         copy_block_GSM<GM2SM_op, gsmem>(gmem_ptr + gmem_block_offset,
-                                        smem_gsmem_ptr, gmem_stride.row);
+                                        smem_gsmem_ptr, gmem_stride);
     }
 
     FA_DEVICE_CONSTEXPR void copy_SM2GM() {
-        copy_block_GSM<SM2GM_op, gsmem>(gmem_ptr, smem_gsmem_ptr,
-                                        gmem_stride.row);
+        copy_block_GSM<SM2GM_op, gsmem>(gmem_ptr, smem_gsmem_ptr, gmem_stride);
     }
 
     FA_DEVICE_CONSTEXPR void copy_SM2RF(int tile = 0) {
