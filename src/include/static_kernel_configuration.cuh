@@ -170,7 +170,8 @@ struct StaticForwardKernelConfig {
                               SRMemTilesDHead, 1, 2>;
     using S2RMemLdstConfigK =
         SRMemLdstConfig<SmemSwizzle, OpS2RSmemStride, OpS2RRmemStride,
-                        S2RSmemStrideK, S2RSmemShapeK>;
+                        S2RSmemStrideK, S2RSmemShapeK,
+                        true /*SmemRowMajorLdmatrix*/>;
 
     using S2RSmemShapeV = TShape<SRMemTileSize, CFG.d_head, SRMemTilesB_c>;
     using S2RSmemStrideV = TStride<CFG.d_head, 1, SRMemTileSize * CFG.d_head>;

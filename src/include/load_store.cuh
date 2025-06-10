@@ -128,22 +128,29 @@ FA_DEVICE_CONSTEXPR void copy_block_GSM(value_t *gmem, value_t *smem,
 }
 
 template <typename Swizzle_, typename OpSmemStride_, typename OpRmemStride_,
-          typename SmemStride_, typename SmemShape_>
+          typename SmemStride_, typename SmemShape_,
+          bool SmemRowMajorLdmatrix_ = false>
 struct SRMemLdstConfig {
     using Swizzle = Swizzle_;
     using OpSmemStride = OpSmemStride_;
     using OpRmemStride = OpRmemStride_;
     using SmemStride = SmemStride_;
     using SmemShape = SmemShape_;
-
+    static constexpr bool smem_row_major_ldmatrix = SmemRowMajorLdmatrix_;
     using OpIters = TShape<SmemShape::rows() / OpSmemStride::row(),
                            SmemShape::cols() / OpSmemStride::col()>;
 
     static constexpr int smem_col_fragments_per_tile = SmemShape::cols() / 8;
 
     static constexpr int lane_to_thr_offset_s2rmem(int lane_id) {
-        int thread_row = lane_id % 16;
-        int thread_col = (lane_id / 16) * COLS_PER_FRAGMENT;
+        int thread_row, thread_col;
+        if constexpr (!smem_row_major_ldmatrix) {
+            thread_row = lane_id % 16;
+            thread_col = (lane_id / 16) * COLS_PER_FRAGMENT;
+        } else {
+            thread_row = (lane_id % 8) + 8 * (lane_id / 16);
+            thread_col = lane_id & 8;
+        }
         return Swizzle::apply(thread_row * SmemStride::row() +
                               thread_col * SmemStride::col());
     }
@@ -199,11 +206,19 @@ copy_warp_fragment_SM2RF(RmemType &rmem, value_t *smem,
             ir * Cfg::OpSmemStride::row() * Cfg::SmemStride::row() +
             swizzle_offset;
         int rmem_row = ir * Cfg::OpRmemStride::row();
-        ldmatrix_x4<false>(&smem[smem_offset],
-                           rmem_uint(rmem_row, 0, tile, 0, 0),
-                           rmem_uint(rmem_row, 0, tile, 1, 0),
-                           rmem_uint(rmem_row, 0, tile, 0, 1),
-                           rmem_uint(rmem_row, 0, tile, 1, 1));
+        if constexpr (!Cfg::smem_row_major_ldmatrix) {
+            ldmatrix_x4<false>(&smem[smem_offset],
+                               rmem_uint(rmem_row, 0, tile, 0, 0),
+                               rmem_uint(rmem_row, 0, tile, 1, 0),
+                               rmem_uint(rmem_row, 0, tile, 0, 1),
+                               rmem_uint(rmem_row, 0, tile, 1, 1));
+        } else {
+            ldmatrix_x4<false>(&smem[smem_offset],
+                               rmem_uint(rmem_row, 0, tile, 0, 0),
+                               rmem_uint(rmem_row, 0, tile, 0, 1),
+                               rmem_uint(rmem_row, 0, tile, 1, 0),
+                               rmem_uint(rmem_row, 0, tile, 1, 1));
+        }
     }
 }
 

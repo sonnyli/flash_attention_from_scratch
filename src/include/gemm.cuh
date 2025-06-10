@@ -66,22 +66,22 @@ FA_DEVICE_CONSTEXPR void warp_fragment_mma_f32_accum(A_t &A, B_t &B, C_t &C,
     auto A_uint = A.view();
     auto B_uint = B.view();
     auto C_view = C.view();
-    constexpr int M_fragments = decltype(A_uint)::Shape::rows();
-    constexpr int N_fragments = decltype(B_uint)::Shape::rows();
+    constexpr int M = decltype(A_uint)::Shape::rows();
+    constexpr int N = decltype(B_uint)::Shape::rows();
 
     FA_UNROLL
-    for (int m = 0; m < M_fragments; ++m) {
+    for (int n = 0; n < N; ++n) {
         FA_UNROLL
-        for (int n = 0; n < N_fragments; ++n) {
-            int ns = (m & 4) ? N_fragments - n - 1 : n;
+        for (int m = 0; m < M; ++m) {
+            int ms = (n & 1) ? M - m - 1 : m;
             mma_m16n8k16_f32_accum<value_t>(
-                C_view(m, n, 0, 0, 0), C_view(m, n, 0, 0, 1),
-                C_view(m, n, 0, 1, 0), C_view(m, n, 0, 1, 1),
-                A_uint(m, 0, tile, 0, 0), A_uint(m, 0, tile, 1, 0),
-                A_uint(m, 0, tile, 0, 1), A_uint(m, 0, tile, 1, 1),
-                B_uint(ns, 0, tile, 0, 0), B_uint(ns, 0, tile, 0, 1),
-                C_view(m, n, 0, 0, 0), C_view(m, n, 0, 0, 1),
-                C_view(m, n, 0, 1, 0), C_view(m, n, 0, 1, 1));
+                C_view(ms, n, 0, 0, 0), C_view(ms, n, 0, 0, 1),
+                C_view(ms, n, 0, 1, 0), C_view(ms, n, 0, 1, 1),
+                A_uint(ms, 0, tile, 0, 0), A_uint(ms, 0, tile, 1, 0),
+                A_uint(ms, 0, tile, 0, 1), A_uint(ms, 0, tile, 1, 1),
+                B_uint(n, 0, tile, 0, 0), B_uint(n, 0, tile, 0, 1),
+                C_view(ms, n, 0, 0, 0), C_view(ms, n, 0, 0, 1),
+                C_view(ms, n, 0, 1, 0), C_view(ms, n, 0, 1, 1));
         }
     }
 }
