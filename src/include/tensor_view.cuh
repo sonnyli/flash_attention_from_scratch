@@ -58,13 +58,15 @@ struct TensorView {
         }
     }
 
-    FA_DEVICE_CONSTEXPR storage_t &operator()(int row, int col, int tile = 0,
-                                              int op_row = 0, int op_col = 0) {
+    FA_DEVICE_CONSTEXPR storage_t &operator()(size_t row, size_t col,
+                                              size_t tile = 0,
+                                              size_t op_row = 0,
+                                              size_t op_col = 0) {
         return data[Layout::crd2idx(row, col, tile, op_row, op_col)];
     }
-    FA_DEVICE_CONSTEXPR storage_t operator()(int row, int col, int tile = 0,
-                                             int op_row = 0,
-                                             int op_col = 0) const {
+    FA_DEVICE_CONSTEXPR storage_t operator()(size_t row, size_t col,
+                                             size_t tile = 0, size_t op_row = 0,
+                                             size_t op_col = 0) const {
         return data[Layout::crd2idx(row, col, tile, op_row, op_col)];
     }
 
