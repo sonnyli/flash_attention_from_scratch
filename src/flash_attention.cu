@@ -100,6 +100,7 @@ flash_attention_forward(const py::object &py_cfg, const torch::Tensor &TQ,
     const int n_Q_blocks = CEIL_DIV(seq_len, B_r);
     const int n_KV_blocks = CEIL_DIV(seq_len, B_c);
     const int n_threads = cfg.n_warps * WARP_SIZE;
+    float softmax_scale = M_LOG2E / sqrtf(d_head);
 
     ForwardKernelArgs args{TQ.data_ptr(), TK.data_ptr(), TV.data_ptr(),
                            TO.data_ptr(), batch_stride,  seq_stride,
