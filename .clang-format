@@ -1,0 +1,20 @@
+---
+Language: Cpp
+AlwaysBreakTemplateDeclarations: true
+BraceWrapping:
+  AfterControlStatement: false
+  AfterFunction: false
+  AfterClass: false
+BreakBeforeBraces: Attach
+FixNamespaceComments: Yes
+IndentWidth: 4
+IncludeBlocks: Preserve  # Keeps groups of includes together
+SortIncludes: true       # Ensures includes are sorted
+
+IncludeCategories:
+  - Regex: '^(<|")?(absl|boost|eigen|glog|gtest|opencv|tensorflow|third_party|torch|std)(/|")'
+    Priority: 1          # External libraries first
+  - Regex: '^<.*>'       
+    Priority: 2          # System headers (standard C++ headers)
+  - Regex: '.*'          
+    Priority: 3          # Project headers (default)
