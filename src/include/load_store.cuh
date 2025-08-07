@@ -104,7 +104,11 @@ struct GSMemLdstConfig {
 // versa. Each warp independently loads a (seq_len_per_warp, d_head) block.
 // Each inner iteration loads a (4, 64) tile, where each row is loaded by a
 // group of 8 consecutive threads.
-// In the edge case that we're loading a (128, 64) block with 8 warps, each warp
+//
+// Note that the swizzling is completely determined before this is called. In
+// other words, the swizzling offset is fixed. This is because each iteration
+// executes in a different "swizzle space", and our layout allows us to keep the
+// same offsets for a thread between iterations.
 template <typename op, /* either GM2SM_async or SM2GM */
           typename Cfg, typename value_t = half, typename index_t = int64_t>
 FA_DEVICE_CONSTEXPR void copy_block_GSM(value_t *gmem, value_t *smem,
@@ -149,19 +153,23 @@ struct SRMemLdstConfig {
             thread_col = (lane_id / 16) * COLS_PER_FRAGMENT;
         } else {
             thread_row = (lane_id % 8) + 8 * (lane_id / 16);
-            thread_col = lane_id & 8;
+            thread_col = lane_id & 8; // first or second column
         }
         return Swizzle::apply(thread_row * SmemStride::row() +
                               thread_col * SmemStride::col());
     }
 
     static constexpr int lane_to_thr_offset_r2smem(int lane_id) {
-        int thread_row = lane_id / 4;
-        int thread_col = (lane_id % 4) * 2;
-        return thread_row * SmemStride::row() + thread_col * SmemStride::col();
+        constexpr int thr_per_row = 4;
+        constexpr int elems_per_thr = 2;
+        int thread_row = lane_id / thr_per_row;
+        int thread_col = (lane_id % thr_per_row) * elems_per_thr;
+        return Swizzle::apply(thread_row * SmemStride::row() +
+                              thread_col * SmemStride::col());
     }
 
-    static constexpr SwizzleStride lane_to_thr_swizzle_stride(int lane_id) {
+    static constexpr SwizzleStride
+    lane_to_thr_swizzle_stride_s2rmem(int lane_id) {
         if constexpr (std::is_same_v<Swizzle, NoSwizzle>) {
             return SwizzleStride{64, 32, 16};
         } else {
@@ -173,9 +181,30 @@ struct SRMemLdstConfig {
             int s2 = 16 * binary_to_pm1(
                               (base_swizzle_offset & base_offset_cmp) == 0);
 
-            // The 64 stride is for when we cross from one swizzle boundary to
+            // The 64 stride is for when we cross from one swizzle space to
             // the next.
             return SwizzleStride{64, s1, s2};
+        }
+    }
+
+    static constexpr SwizzleStride
+    lane_to_thr_swizzle_stride_r2smem(int lane_id) {
+        if constexpr (std::is_same_v<Swizzle, NoSwizzle>) {
+            return SwizzleStride{64, 32, 16, 8};
+        } else {
+            int base_swizzle_offset = lane_to_thr_offset_r2smem(lane_id);
+            // Determine the swizzle offsets
+            int base_offset_cmp = Swizzle::yy_mask_lowest_bit;
+            int s1 = 32 * binary_to_pm1((base_swizzle_offset &
+                                         (base_offset_cmp << 2)) == 0);
+            int s2 = 16 * binary_to_pm1((base_swizzle_offset &
+                                         (base_offset_cmp << 1)) == 0);
+            int s3 =
+                8 * binary_to_pm1((base_swizzle_offset & base_offset_cmp) == 0);
+
+            // The 64 stride is for when we cross from one swizzle boundary to
+            // the next.
+            return SwizzleStride{64, s1, s2, s3};
         }
     }
 };
@@ -198,7 +227,7 @@ copy_warp_fragment_SM2RF(RmemType &rmem, value_t *smem,
     static_assert(RmemType::Shape::cols() == 1,
                   "RmemType::Shape.cols must be 2");
     auto rmem_uint = rmem.view2x2();
-    int swizzle_offset = swizzle_stride.offset(tile);
+    int swizzle_offset = swizzle_stride.offset_s2rmem(tile);
 
     FA_UNROLL
     for (int ir = 0; ir < Cfg::OpIters::rows(); ++ir) {
@@ -247,7 +276,7 @@ copy_warp_fragment_transposed_SM2RF(RmemType &rmem, value_t *smem,
 
     FA_UNROLL
     for (int ic = 0; ic < Cfg::OpIters::cols(); ++ic) {
-        int swizzle_offset = swizzle_stride.offset(ic);
+        int swizzle_offset = swizzle_stride.offset_s2rmem(ic);
         int smem_offset = base_offset + swizzle_offset;
 
         int rmem_row = ic * Cfg::OpRmemStride::row();
@@ -263,8 +292,9 @@ copy_warp_fragment_transposed_SM2RF(RmemType &rmem, value_t *smem,
 // Each iteration of the inner loop copies a (8, 8) tile, i.e. a single
 // fragment. This will be used to copy O.
 template <typename Cfg, typename RmemType, typename value_t>
-FA_DEVICE_CONSTEXPR void copy_warp_fragment_RF2SM(RmemType &rmem, value_t *smem,
-                                                  const int &thread_offset) {
+FA_DEVICE_CONSTEXPR void
+copy_warp_fragment_RF2SM(RmemType &rmem, value_t *smem,
+                         const SwizzleStride &swizzle_stride) {
     static_assert(is_supported_mma_input_type<value_t>(),
                   "value_t must be half or bfloat16");
     using Swizzle = typename Cfg::Swizzle;
@@ -274,10 +304,9 @@ FA_DEVICE_CONSTEXPR void copy_warp_fragment_RF2SM(RmemType &rmem, value_t *smem,
     for (int ir = 0; ir < Cfg::OpIters::rows(); ++ir) {
         FA_UNROLL
         for (int ic = 0; ic < Cfg::OpIters::cols(); ++ic) {
-            int smem_offset = Swizzle::apply(
+            int smem_offset =
                 ir * Cfg::OpSmemStride::row() * Cfg::SmemStride::row() +
-                ic * Cfg::OpSmemStride::col() * Cfg::SmemStride::col() +
-                thread_offset);
+                swizzle_stride.offset_r2smem(ic);
             reinterpret_cast<uint32_t *>(&smem[smem_offset])[0] = rmem_uint(
                 ir * Cfg::OpRmemStride::row(), ic * Cfg::OpRmemStride::col());
         }

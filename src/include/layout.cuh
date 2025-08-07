@@ -25,12 +25,22 @@ struct SwizzleStride {
     int s0;
     int s1;
     int s2;
+    int s3;
 
-    constexpr int offset(int idx) const {
-        int i0 = (idx >> 2) & 1;
-        int i1 = (idx >> 1) & 1;
-        int i2 = idx & 1;
+    // This determines the iteration of the copy we're in.
+    constexpr int offset_s2rmem(int iter) const {
+        int i0 = (iter >> 2) & 1;
+        int i1 = (iter >> 1) & 1;
+        int i2 = iter & 1;
         return i0 * s0 + i1 * s1 + i2 * s2;
+    }
+
+    constexpr int offset_r2smem(int iter) const {
+        int i0 = (iter >> 3) & 1;
+        int i1 = (iter >> 2) & 1;
+        int i2 = (iter >> 1) & 1;
+        int i3 = iter & 1;
+        return i0 * s0 + i1 * s1 + i2 * s2 + i3 * s3;
     }
 };
 
