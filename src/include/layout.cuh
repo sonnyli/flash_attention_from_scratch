@@ -77,11 +77,11 @@ struct TShape {
   private:
     template <typename, typename, bool>
     friend struct Layout;
-    static constexpr int _rows = Rows;
-    static constexpr int _cols = Cols;
+
+    // TODO: remove unnecessary ones
+
     static constexpr int _op_rows = OpRows;
     static constexpr int _op_cols = OpCols;
-    static constexpr int _tiles = Tiles;
 };
 
 template <typename Stride_, typename Shape_, bool OpTilingRemoved = false>

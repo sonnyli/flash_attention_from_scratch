@@ -21,7 +21,7 @@ struct Array {
     FA_DEVICE_CONSTEXPR value_t &operator[](int idx) { return _data[idx]; }
     FA_DEVICE_CONSTEXPR value_t operator[](int idx) const { return _data[idx]; }
 
-    FA_DEVICE_CONSTEXPR int size() const { return N; }
+    FA_DEVICE_CONSTEXPR static int size() { return N; }
 };
 
 template <int N, typename value_t, int Alignment = 16>

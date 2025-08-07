@@ -273,6 +273,8 @@ struct StaticForwardKernelConfig {
 
     using GEMM_QK = GEMM<Q_t, K_t, S_accum_t, SRMemTilesDHead, value_t>;
     using GEMM_PV = GEMM<P_t, V_t, O_accum_t, SRMemTilesB_c, value_t>;
+
+    using row_statistics_t = ArrayAligned<N::QO_fragments_per_warp, accum_t>;
 };
 
 } // namespace flash
