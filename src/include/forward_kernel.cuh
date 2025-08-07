@@ -129,9 +129,9 @@ flash_forward_kernel(__grid_constant__ const ForwardKernelArgs args) {
     value_t *smem_V = &smem_K[Kernel::B_c * Kernel::d_head];
 
     // Pointers to the K&V locations in smem that the warp copies to.
-    Q_t Q(gmem_Q, gmem_seq_stride, smem_Q);
-    K_t K(gmem_K, gmem_seq_stride, smem_K);
-    V_t V(gmem_V, gmem_seq_stride, smem_V);
+    Q_t Q(gmem_Q, smem_Q);
+    K_t K(gmem_K, smem_K);
+    V_t V(gmem_V, smem_V);
 
     // The accumulator for O is only kept in registers. At the end of the
     // kernel, it is then converted into a 16-bit type and then copied into
@@ -185,7 +185,7 @@ flash_forward_kernel(__grid_constant__ const ForwardKernelArgs args) {
 
     final_softmax_normalization(O_accum_no_op_tiling, l);
 
-    O_t O_b16(gmem_O, gmem_seq_stride, smem_O);
+    O_t O_b16(gmem_O, smem_O);
     auto O_b16_view = O_b16.view();
     convert_to_16_bit_dtype(O_accum_no_op_tiling, O_b16_view);
 
