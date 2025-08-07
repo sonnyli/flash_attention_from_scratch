@@ -64,7 +64,8 @@ struct GM2SM {
 template <typename T>
 struct SM2GM {
     FA_DEVICE_CONSTEXPR void operator()(T *gmem, T *smem) {
-        reinterpret_cast<uint4 *>(gmem)[0] = reinterpret_cast<uint4 *>(smem)[0];
+        st_global_na_relaxed_sys(reinterpret_cast<uint4 *>(gmem),
+                                 reinterpret_cast<uint4 *>(smem)[0]);
     }
 };
 
