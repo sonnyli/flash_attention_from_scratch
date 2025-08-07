@@ -38,6 +38,7 @@
 #define N_BUFFER_STAGES 2
 
 #define GSMEM_THR_PER_ROW 8
+#define SWIZZLE_TILE_SIZE 64
 
 namespace flash {
 

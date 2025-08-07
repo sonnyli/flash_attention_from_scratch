@@ -13,40 +13,6 @@
 
 namespace flash {
 
-struct LDSTCommon {
-    const bool swizzled;
-    const bool async_copy;
-};
-
-template <typename ShapeT, int TileBufferSize, bool LoadEntireBlockIntoRF,
-          bool RowMajorOpTile = true>
-struct RmemLdstConfig {
-    using rmem_shape = ShapeT;
-    static constexpr int rmem_tile_buffer_size = TileBufferSize;
-    static constexpr bool load_entire_block_into_rf = LoadEntireBlockIntoRF;
-    static constexpr bool row_major_op_tile = RowMajorOpTile;
-};
-
-// TODO: cleanup
-template <typename RmemConfigT, bool Swizzled, bool AsyncCopy, bool Transposed,
-          int BlockSize, int SmemCols, int WarpLdstRows,
-          bool ComputeOverEntireBlock>
-struct GSRMemLdstConfig {
-    using rmem = RmemConfigT;
-    static constexpr LDSTCommon common{Swizzled, AsyncCopy};
-    static constexpr bool transposed = Transposed;
-    static constexpr int block_size = BlockSize;
-    static constexpr int smem_cols = SmemCols;
-
-    // This is the # of rows a warp in a thread-block independently
-    // loads/stores. This is only used for Q and O.
-    static constexpr int warp_ldst_rows = WarpLdstRows;
-
-    // Whether not the warp will compute over the entire block.
-    // This is false for (Q&O&S) and true for (K&V).
-    static constexpr bool compute_over_entire_block = ComputeOverEntireBlock;
-};
-
 template <typename T>
 struct GM2SM_async {
     FA_DEVICE_CONSTEXPR void operator()(T *gmem, T *smem) {
@@ -69,16 +35,46 @@ struct SM2GM {
     }
 };
 
+template <typename ShapeT, int TileBufferSize, bool LoadEntireBlockIntoRF,
+          bool RowMajorOpTile = true>
+struct RmemLdstConfig {
+    using rmem_shape = ShapeT;
+    static constexpr int rmem_tile_buffer_size = TileBufferSize;
+    static constexpr bool load_entire_block_into_rf = LoadEntireBlockIntoRF;
+    static constexpr bool row_major_op_tile = RowMajorOpTile;
+};
+
+// TODO: cleanup
+template <typename RmemConfig, bool Transposed, int WarpLdstRows,
+          bool ComputeOverEntireBlock>
+struct GSRMemLdstConfig {
+    using rmem = RmemConfig;
+    static constexpr bool transposed = Transposed;
+
+    // This is the # of rows a warp in a thread-block independently
+    // loads/stores. This is only used for Q and O.
+    static constexpr int warp_ldst_rows = WarpLdstRows;
+
+    // Whether not the warp will compute over the entire block.
+    // This is false for (Q&O&S) and true for (K&V).
+    static constexpr bool compute_over_entire_block = ComputeOverEntireBlock;
+};
+
+// TODO: create a constructor and use as an object
 template <typename Swizzle_, typename OpStride_, typename TensorShape_,
-          typename SmemStride_, typename index_t = int64_t>
+          typename SmemStride_, typename GMemStride_,
+          typename index_t = int64_t>
 struct GSMemLdstConfig {
     using Swizzle = Swizzle_;
     using OpStride = OpStride_;
     using TensorShape = TensorShape_;
     using SmemStride = SmemStride_;
+    using GMemStride = GMemStride_;
 
-    using OpIters = TShape<TensorShape::rows() / OpStride::row(),
-                           TensorShape::cols() / OpStride::col()>;
+    using OpIters =
+        GSMemShape<TensorShape::rows() / OpStride::row(),
+                   TensorShape::cols() / OpStride::col(), 0,
+                   TensorShape::swizzle_spaces() / OpStride::swizzle_space()>;
 
     static constexpr int thrs_per_row = 8;
 
@@ -88,10 +84,8 @@ struct GSMemLdstConfig {
         return (tid % thrs_per_row) * COLS_PER_FRAGMENT;
     }
 
-    static constexpr index_t gmem_thr_offset(int tid,
-                                             RuntimeStride<index_t> stride) {
-        return tid_to_thr_row(tid) * stride.row +
-               tid_to_thr_col(tid) * stride.col;
+    static constexpr index_t gmem_thr_offset(int tid, GMemStride stride) {
+        return stride.crd2idx(tid_to_thr_row(tid), tid_to_thr_col(tid), 0, 0);
     }
 
     static constexpr int smem_thr_offset(int tid) {
@@ -110,23 +104,23 @@ struct GSMemLdstConfig {
 // executes in a different "swizzle space", and our layout allows us to keep the
 // same offsets for a thread between iterations.
 template <typename op, /* either GM2SM_async or SM2GM */
-          typename Cfg, typename value_t = half, typename index_t = int64_t>
+          typename Cfg, typename value_t = half, typename GMemStride>
 FA_DEVICE_CONSTEXPR void copy_block_GSM(value_t *gmem, value_t *smem,
-                                        const index_t &gmem_row_stride) {
+                                        const GMemStride &gmem_stride) {
     FA_UNROLL
-    for (int ir = 0; ir < Cfg::OpIters::rows(); ++ir) {
+    for (int ss = 0; ss < Cfg::OpIters::swizzle_spaces(); ++ss) {
         FA_UNROLL
-        for (int ic = 0; ic < Cfg::OpIters::cols(); ++ic) {
+        for (int ir = 0; ir < Cfg::OpIters::rows(); ++ir) {
+            FA_UNROLL
+            for (int ic = 0; ic < Cfg::OpIters::cols(); ++ic) {
+                int r = ir * Cfg::OpStride::row();
+                int c = ic * Cfg::OpStride::col();
+                int t = ss * Cfg::OpStride::swizzle_space();
 
-            int r = ir * Cfg::OpStride::row();
-            int c = ic * Cfg::OpStride::col();
-            int smem_idx =
-                r * Cfg::SmemStride::row() + c * Cfg::SmemStride::col();
-
-            // We assume gmem is continguous along the d_head dimension.
-            index_t gmem_idx = Cfg::OpStride::row() * ir * gmem_row_stride +
-                               c * 1; // Use col stride of 1
-            op()(&gmem[gmem_idx], &smem[smem_idx]);
+                auto smem_idx = Cfg::SmemStride::crd2idx(r, c, 0, t);
+                auto gmem_idx = gmem_stride.crd2idx(r, c, 0, t);
+                op()(&gmem[gmem_idx], &smem[smem_idx]);
+            }
         }
     }
 }
@@ -141,10 +135,11 @@ struct SRMemLdstConfig {
     using SmemStride = SmemStride_;
     using SmemShape = SmemShape_;
     static constexpr bool smem_row_major_ldmatrix = SmemRowMajorLdmatrix_;
-    using OpIters = TShape<SmemShape::rows() / OpSmemStride::row(),
-                           SmemShape::cols() / OpSmemStride::col()>;
-
-    static constexpr int smem_col_fragments_per_tile = SmemShape::cols() / 8;
+    using OpIters =
+        GSMemShape<SmemShape::rows() / OpSmemStride::row(),
+                   SmemShape::cols() / OpSmemStride::col(),
+                   SmemShape::tiles() / OpSmemStride::tile(),
+                   SmemShape::swizzle_spaces() / OpSmemStride::swizzle_space()>;
 
     static constexpr int lane_to_thr_offset_s2rmem(int lane_id) {
         int thread_row, thread_col;
@@ -171,7 +166,7 @@ struct SRMemLdstConfig {
     static constexpr SwizzleStride
     lane_to_thr_swizzle_stride_s2rmem(int lane_id) {
         if constexpr (std::is_same_v<Swizzle, NoSwizzle>) {
-            return SwizzleStride{64, 32, 16};
+            return SwizzleStride{32, 16};
         } else {
             int base_swizzle_offset = lane_to_thr_offset_s2rmem(lane_id);
             // Determine the swizzle offsets
@@ -181,16 +176,14 @@ struct SRMemLdstConfig {
             int s2 = 16 * binary_to_pm1(
                               (base_swizzle_offset & base_offset_cmp) == 0);
 
-            // The 64 stride is for when we cross from one swizzle space to
-            // the next.
-            return SwizzleStride{64, s1, s2};
+            return SwizzleStride{s1, s2};
         }
     }
 
     static constexpr SwizzleStride
     lane_to_thr_swizzle_stride_r2smem(int lane_id) {
         if constexpr (std::is_same_v<Swizzle, NoSwizzle>) {
-            return SwizzleStride{64, 32, 16, 8};
+            return SwizzleStride{32, 16, 8};
         } else {
             int base_swizzle_offset = lane_to_thr_offset_r2smem(lane_id);
             // Determine the swizzle offsets
@@ -202,9 +195,7 @@ struct SRMemLdstConfig {
             int s3 =
                 8 * binary_to_pm1((base_swizzle_offset & base_offset_cmp) == 0);
 
-            // The 64 stride is for when we cross from one swizzle boundary to
-            // the next.
-            return SwizzleStride{64, s1, s2, s3};
+            return SwizzleStride{s1, s2, s3};
         }
     }
 };
@@ -227,26 +218,28 @@ copy_warp_fragment_SM2RF(RmemType &rmem, value_t *smem,
     static_assert(RmemType::Shape::cols() == 1,
                   "RmemType::Shape.cols must be 2");
     auto rmem_uint = rmem.view2x2();
-    int swizzle_offset = swizzle_stride.offset_s2rmem(tile);
+    const int inner_tile = tile % Cfg::SmemShape::tiles();
+    const int swizzle_space = tile / Cfg::SmemShape::tiles();
+    const int swizzle_offset = swizzle_stride.offset_s2rmem(inner_tile);
 
     FA_UNROLL
     for (int ir = 0; ir < Cfg::OpIters::rows(); ++ir) {
+        int sr = ir * Cfg::OpSmemStride::row();
+        // tile and col are 0 because ss's taken care of by swizzle.
         int smem_offset =
-            ir * Cfg::OpSmemStride::row() * Cfg::SmemStride::row() +
-            swizzle_offset;
-        int rmem_row = ir * Cfg::OpRmemStride::row();
+            Cfg::SmemStride::crd2idx(sr, 0, 0, swizzle_space) + swizzle_offset;
+        int rr = ir * Cfg::OpRmemStride::row();
+
         if constexpr (!Cfg::smem_row_major_ldmatrix) {
-            ldmatrix_x4<false>(&smem[smem_offset],
-                               rmem_uint(rmem_row, 0, tile, 0, 0),
-                               rmem_uint(rmem_row, 0, tile, 1, 0),
-                               rmem_uint(rmem_row, 0, tile, 0, 1),
-                               rmem_uint(rmem_row, 0, tile, 1, 1));
+            ldmatrix_x4<false>(&smem[smem_offset], rmem_uint(rr, 0, tile, 0, 0),
+                               rmem_uint(rr, 0, tile, 1, 0),
+                               rmem_uint(rr, 0, tile, 0, 1),
+                               rmem_uint(rr, 0, tile, 1, 1));
         } else {
-            ldmatrix_x4<false>(&smem[smem_offset],
-                               rmem_uint(rmem_row, 0, tile, 0, 0),
-                               rmem_uint(rmem_row, 0, tile, 0, 1),
-                               rmem_uint(rmem_row, 0, tile, 1, 0),
-                               rmem_uint(rmem_row, 0, tile, 1, 1));
+            ldmatrix_x4<false>(&smem[smem_offset], rmem_uint(rr, 0, tile, 0, 0),
+                               rmem_uint(rr, 0, tile, 0, 1),
+                               rmem_uint(rr, 0, tile, 1, 0),
+                               rmem_uint(rr, 0, tile, 1, 1));
         }
     }
 }
@@ -263,28 +256,28 @@ copy_warp_fragment_transposed_SM2RF(RmemType &rmem, value_t *smem,
                                     const int &tile) {
     static_assert(is_supported_mma_input_type<value_t>(),
                   "value_t must be half or bfloat16");
-    using Swizzle = typename Cfg::Swizzle;
     static_assert(RmemType::Shape::cols() == 1,
                   "RmemType::Shape.cols must be 2");
-    static_assert(Cfg::OpIters::cols() == RmemType::ViewType2x2::Shape::rows() /
-                                              Cfg::OpRmemStride::col(),
-                  "OpIters.cols must be equal to RmemType::Shape.rows / "
-                  "Cfg::OpRmemStride.col");
+    static_assert(Cfg::OpIters::tiles() * Cfg::OpIters::swizzle_spaces() ==
+                      RmemType::ViewType2x2::Shape::rows() /
+                          Cfg::OpRmemStride::col(),
+                  "OpIters.tiles * OpIters.swizzle_spaces must be equal to "
+                  "RmemType::Shape.rows / Cfg::OpRmemStride.col");
     auto rmem_uint = rmem.view2x2();
 
-    int base_offset = tile * Cfg::SmemStride::tile();
-
     FA_UNROLL
-    for (int ic = 0; ic < Cfg::OpIters::cols(); ++ic) {
-        int swizzle_offset = swizzle_stride.offset_s2rmem(ic);
-        int smem_offset = base_offset + swizzle_offset;
-
-        int rmem_row = ic * Cfg::OpRmemStride::row();
-        ldmatrix_x4<true>(&smem[smem_offset],
-                          rmem_uint(rmem_row, 0, tile, 0, 0),
-                          rmem_uint(rmem_row, 0, tile, 0, 1),
-                          rmem_uint(rmem_row, 0, tile, 1, 0),
-                          rmem_uint(rmem_row, 0, tile, 1, 1));
+    for (int ss = 0; ss < Cfg::OpIters::swizzle_spaces(); ++ss) {
+        FA_UNROLL
+        for (int ic = 0; ic < Cfg::OpIters::tiles(); ++ic) {
+            auto smem_idx = Cfg::SmemStride::crd2idx(0, 0, tile, ss) +
+                            swizzle_stride.offset_s2rmem(ic);
+            int rr =
+                ss * Cfg::SmemShape::tiles() + ic * Cfg::OpRmemStride::row();
+            ldmatrix_x4<true>(&smem[smem_idx], rmem_uint(rr, 0, tile, 0, 0),
+                              rmem_uint(rr, 0, tile, 0, 1),
+                              rmem_uint(rr, 0, tile, 1, 0),
+                              rmem_uint(rr, 0, tile, 1, 1));
+        }
     }
 }
 
@@ -297,18 +290,23 @@ copy_warp_fragment_RF2SM(RmemType &rmem, value_t *smem,
                          const SwizzleStride &swizzle_stride) {
     static_assert(is_supported_mma_input_type<value_t>(),
                   "value_t must be half or bfloat16");
-    using Swizzle = typename Cfg::Swizzle;
     auto rmem_uint = rmem.view();
 
     FA_UNROLL
-    for (int ir = 0; ir < Cfg::OpIters::rows(); ++ir) {
+    for (int ss = 0; ss < Cfg::OpIters::swizzle_spaces(); ++ss) {
         FA_UNROLL
-        for (int ic = 0; ic < Cfg::OpIters::cols(); ++ic) {
-            int smem_offset =
-                ir * Cfg::OpSmemStride::row() * Cfg::SmemStride::row() +
-                swizzle_stride.offset_r2smem(ic);
-            reinterpret_cast<uint32_t *>(&smem[smem_offset])[0] = rmem_uint(
-                ir * Cfg::OpRmemStride::row(), ic * Cfg::OpRmemStride::col());
+        for (int it = 0; it < Cfg::OpIters::tiles(); ++it) {
+            FA_UNROLL
+            for (int ir = 0; ir < Cfg::OpIters::rows(); ++ir) {
+                int sr = ir * Cfg::OpSmemStride::row();
+                auto smem_idx = Cfg::SmemStride::crd2idx(sr, 0, 0, ss) +
+                                swizzle_stride.offset_r2smem(it);
+
+                reinterpret_cast<uint32_t *>(&smem[smem_idx])[0] =
+                    rmem_uint(ir * Cfg::OpRmemStride::row(),
+                              it * Cfg::OpRmemStride::col() +
+                                  ss * Cfg::SmemShape::tiles());
+            }
         }
     }
 }
