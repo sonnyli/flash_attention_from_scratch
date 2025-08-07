@@ -21,8 +21,8 @@ template <bool is_first, bool optimized_softmax, typename Q_t, typename K_t,
           typename row_statistics_t, typename GEMM_QK, typename GEMM_PV>
 FA_DEVICE void process_kv_block(Q_t &Q, K_t &K, V_t &V, O_accum_t &O_accum,
                                 row_statistics_t &m, row_statistics_t &l,
-                                const float &softmax_scale,
-                                const bool &is_last_block) {
+                                const float &softmax_scale, const int &block,
+                                const int &n_blocks) {
 
     S_accum_t S_accum;
     // Initialize the registers for S to 0.
@@ -37,8 +37,7 @@ FA_DEVICE void process_kv_block(Q_t &Q, K_t &K, V_t &V, O_accum_t &O_accum,
 
     // Start the (async) copy for the V matrix from gmem to smem but
     // do not wait until after the S=QK matmul.
-    V.copy_GM2SM();
-    V.advance_gmem_block();
+    V.copy_GM2SM(block);
     cp_async_commit();
 
     if constexpr (K_t::load_entire_block_into_rf) {
@@ -47,6 +46,7 @@ FA_DEVICE void process_kv_block(Q_t &Q, K_t &K, V_t &V, O_accum_t &O_accum,
 
     matmul<GEMM_QK>(Q, K, S_accum);
 
+    // Wait for V to finish loading.
     cp_async_wait<0>();
     // After this barrier, it is safe to load the next block of K.
     __syncthreads();
@@ -59,9 +59,8 @@ FA_DEVICE void process_kv_block(Q_t &Q, K_t &K, V_t &V, O_accum_t &O_accum,
     // Start the async copy for the next K block-tile from gmem to
     // smem, but do not wait for the copy until the next iteration
     // when we need it.
-    if (is_first || !is_last_block) {
-        K.copy_GM2SM();
-        K.advance_gmem_block();
+    if (block < n_blocks - 1) {
+        K.copy_GM2SM(block + 1);
         cp_async_commit();
     }
 
@@ -140,10 +139,9 @@ flash_forward_kernel(__grid_constant__ const ForwardKernelArgs args) {
     // gmem.
 
     // Start the async copy of the Q and K tiles.
-    Q.copy_GM2SM();
+    Q.copy_GM2SM(0);
     cp_async_commit();
-    K.copy_GM2SM();
-    K.advance_gmem_block();
+    K.copy_GM2SM(0);
     cp_async_commit();
 
     // Initialize softmax_scale, m, and l.
@@ -178,13 +176,13 @@ flash_forward_kernel(__grid_constant__ const ForwardKernelArgs args) {
 
     process_kv_block<true, Kernel::optimized_softmax, Q_t, K_t, V_t, S_accum_t,
                      P_t, O_accum_t, row_statistics_t, GEMM_QK, GEMM_PV>(
-        Q, K, V, O_accum, m, l, softmax_scale, false);
+        Q, K, V, O_accum, m, l, softmax_scale, 0, args.n_KV_blocks);
 
     for (int block = 1; block < args.n_KV_blocks; ++block) {
         process_kv_block<false, Kernel::optimized_softmax, Q_t, K_t, V_t,
                          S_accum_t, P_t, O_accum_t, row_statistics_t, GEMM_QK,
-                         GEMM_PV>(Q, K, V, O_accum, m, l, softmax_scale,
-                                  block == args.n_KV_blocks - 1);
+                         GEMM_PV>(Q, K, V, O_accum, m, l, softmax_scale, block,
+                                  args.n_KV_blocks);
     }
 
     // Finish summing row_sums across all threads in the same row.

@@ -27,9 +27,7 @@ struct RmemLdstConfig {
     static constexpr bool row_major_op_tile = RowMajorOpTile;
 };
 
-// constexpr non-type template parameter containing parameters for LDST for a
-// block (Q, K, V, or O) from gmem to smem and vice versa, and also loading from
-// smem to the rmem.
+// TODO: cleanup
 template <typename RmemConfigT, bool Swizzled, bool AsyncCopy, bool Transposed,
           int BlockSize, int SmemCols, int WarpLdstRows,
           bool ComputeOverEntireBlock>
@@ -71,7 +69,7 @@ struct SM2GM {
 };
 
 template <typename Swizzle_, typename OpStride_, typename TensorShape_,
-          typename SmemStride_>
+          typename SmemStride_, typename index_t = int64_t>
 struct GSMemLdstConfig {
     using Swizzle = Swizzle_;
     using OpStride = OpStride_;
@@ -89,7 +87,8 @@ struct GSMemLdstConfig {
         return (tid % thrs_per_row) * COLS_PER_FRAGMENT;
     }
 
-    static constexpr int gmem_thr_offset(int tid, RuntimeStride stride) {
+    static constexpr index_t gmem_thr_offset(int tid,
+                                             RuntimeStride<index_t> stride) {
         return tid_to_thr_row(tid) * stride.row +
                tid_to_thr_col(tid) * stride.col;
     }
@@ -112,22 +111,22 @@ struct GSMemLdstConfig {
 template <typename op, /* either GM2SM_async or SM2GM */
           typename Cfg, typename value_t = half, typename index_t = int64_t>
 FA_DEVICE_CONSTEXPR void copy_block_GSM(value_t *gmem, value_t *smem,
-                                        const int gmem_row_stride) {
+                                        const index_t &gmem_row_stride) {
     FA_UNROLL
     for (int ir = 0; ir < Cfg::OpIters::rows(); ++ir) {
         FA_UNROLL
         for (int ic = 0; ic < Cfg::OpIters::cols(); ++ic) {
+
             int r = ir * Cfg::OpStride::row();
             int c = ic * Cfg::OpStride::col();
             int smem_idx =
                 r * Cfg::SmemStride::row() + c * Cfg::SmemStride::col();
 
             // We assume gmem is continguous along the d_head dimension.
-            int gmem_idx = c * 1; // Use col stride of 1
+            index_t gmem_idx = Cfg::OpStride::row() * ir * gmem_row_stride +
+                               c * 1; // Use col stride of 1
             op()(&gmem[gmem_idx], &smem[smem_idx]);
         }
-
-        gmem += Cfg::OpStride::row() * gmem_row_stride;
     }
 }
 
