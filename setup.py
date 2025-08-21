@@ -63,13 +63,13 @@ setup(
     version=__version__,
     ext_modules=ext_modules,
     cmdclass={"build_ext": BuildExtension},
-    # install_requires=[
-    #     "torch",
-    #     "einops",
-    # ],
-    # setup_requires=[
-    #     "packaging",
-    #     "psutil",
-    #     "ninja",
-    # ],
+    install_requires=[
+        "torch",
+        "einops",
+    ],
+    setup_requires=[
+        "packaging",
+        "psutil",
+        "ninja",
+    ],
 )
