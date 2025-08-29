@@ -65,9 +65,9 @@ def tile_softmax_flop(B_r, B_c, d_head) -> int:
     return B_r * (5 * B_c + d_head + 2)
 
 
-def tile_flop(B_r, B_c, d_head) -> int:
-    QK_flops = B_r * d_head * B_c
-    PV_flops = B_r * B_c * d_head
+def kv_tile_flop(B_r, B_c, d_head) -> int:
+    QK_flops = 2 * B_r * d_head * B_c
+    PV_flops = 2 * B_r * B_c * d_head
 
     softmax_flops = tile_softmax_flop(B_r, B_c, d_head)
 
@@ -80,7 +80,7 @@ def gmem_transfer_size(B_r, B_c, d_head) -> int:
 
 def arithmetic_intensity(B_r, B_c, kv_seq_len, d_head) -> float:
     return (
-        tile_flop(B_r, B_c, d_head) * (kv_seq_len // B_c)
+        kv_tile_flop(B_r, B_c, d_head) * (kv_seq_len // B_c)
     ) / gmem_transfer_size(B_r, kv_seq_len, d_head)
 
 
@@ -93,14 +93,14 @@ def calc_total_flop(n_samples, n_heads, seq_len, B_r, B_c, d_head):
 
     epilogue_flops = B_r * d_head
     head_sample_flops = T_r * (
-        T_c * tile_flop(B_r, B_c, d_head) + epilogue_flops
+        T_c * kv_tile_flop(B_r, B_c, d_head) + epilogue_flops
     )
 
     return head_sample_flops * n_samples * n_heads
 
 
 def calc_self_attn_flop(n_samples, n_heads, seq_len, d_head):
-    return n_samples * n_heads * (2 * seq_len**2 * d_head + 6 * seq_len**2)
+    return n_samples * n_heads * (4 * seq_len**2 * d_head + 6 * seq_len**2)
 
 
 @dataclass(frozen=True, order=True)
