@@ -57,6 +57,6 @@ Here are the performances of each kernel relative to the official implementation
 | 15. Tiling along `d_head`                                               |          97.9% |      99.5% |         101.5% |     101.3% |
 | 16. Static GMEM Stride                                                  |          99.2% |     100.4% |         100.9% |     100.7% |
 |                                                                         |                |            |                |            |
-| 0. Reference (TFLOPs)                                                   |          94.28 |      88.01 |          34.04 |      33.48 |
+| 0. Reference (TFLOPs)                                                   |          186.4 |      174.0 |          67.29 |       66.2 |
 
 > *The harmonic mean is taken over sequence lengths 512, 1024, 2048, 4096, 8192, 16384.
